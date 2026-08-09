@@ -8,6 +8,7 @@ so you can tune bitrate/quality per platform (e.g. keep Twitch under its
 See **[SETUP.md](SETUP.md)** for how to get stream keys from each platform
 and use the dock. See **[QA-CHECKLIST.md](QA-CHECKLIST.md)** for the manual
 test pass to run before a release.
+<img width="1567" height="1098" alt="Screenshot 2026-08-09 144414" src="https://github.com/user-attachments/assets/80d6337a-e2e4-47be-8389-aa77de5dfc6f" />
 
 ## How it works
 
