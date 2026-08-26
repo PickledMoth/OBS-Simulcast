@@ -55,6 +55,7 @@ private slots:
 
 private:
 	void BuildUi();
+	void RunFirstTimeSetupIfNeeded();
 	void PopulateFromManager();
 	void ApplyRowsToManager();
 	void AddPlatformRow(const OutputConfig &config);

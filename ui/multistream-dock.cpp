@@ -37,6 +37,7 @@
 #include "settings-store.h"
 #include "password-crypto.h"
 #include "chat-diagnostics-dialog.h"
+#include "first-run-setup-dialog.h"
 
 enum Column {
 	ColEnabled = 0,
@@ -383,6 +384,7 @@ MultistreamDock::MultistreamDock(QWidget *parent) : QWidget(parent)
 
 	MultistreamManager::Get().LoadFromStore();
 	PopulateFromManager();
+	RunFirstTimeSetupIfNeeded();
 
 	statusTimer_ = new QTimer(this);
 	connect(statusTimer_, &QTimer::timeout, this, &MultistreamDock::RefreshStatus);
@@ -536,6 +538,57 @@ void MultistreamDock::BuildUi()
 		ApplyRowsToManager();
 		MultistreamManager::Get().SaveToStore();
 	});
+}
+
+void MultistreamDock::RunFirstTimeSetupIfNeeded()
+{
+	// ConfigFileExists() is false only the very first time this profile has
+	// ever had a dock constructed against it -- every save path (including
+	// this dock's own destructor) writes the file, so this only ever fires
+	// once per profile.
+	if (SettingsStore::Get().ConfigFileExists())
+		return;
+
+	FirstRunSetupDialog dlg(this);
+	if (dlg.exec() != QDialog::Accepted)
+		return;
+
+	const auto &entries = dlg.Result();
+	if (entries.empty())
+		return;
+
+	for (auto &entry : entries) {
+		for (auto &c : workingConfigs_) {
+			if (c.platform == entry.platform) {
+				c = entry;
+				break;
+			}
+		}
+	}
+
+	MultistreamManager::Get().SetConfigs(workingConfigs_);
+	MultistreamManager::Get().SaveToStore();
+	PopulateFromManager();
+
+	// Immediately save whatever was entered as a "Default" preset so the
+	// preset combo has something real to offer right away, matching what
+	// the user asked for ("a default preset").
+	auto presets = SettingsStore::Get().LoadPresets();
+	const std::string kDefaultName = "Default";
+	bool replaced = false;
+	for (auto &[pname, members] : presets) {
+		if (pname == kDefaultName) {
+			members = workingConfigs_;
+			replaced = true;
+			break;
+		}
+	}
+	if (!replaced)
+		presets.push_back({kDefaultName, workingConfigs_});
+	SettingsStore::Get().SavePresets(presets);
+
+	RefreshPresetCombo();
+	presetCombo_->setCurrentText(QString::fromStdString(kDefaultName));
 }
 
 void MultistreamDock::RefreshFromManager()
@@ -890,8 +943,8 @@ void MultistreamDock::RefreshPresetCombo()
 {
 	QString current = presetCombo_->currentText();
 	presetCombo_->clear();
-	for (auto &[name, ids] : SettingsStore::Get().LoadPresets()) {
-		(void)ids;
+	for (auto &[name, members] : SettingsStore::Get().LoadPresets()) {
+		(void)members;
 		presetCombo_->addItem(QString::fromStdString(name));
 	}
 	int idx = presetCombo_->findText(current);
@@ -910,24 +963,18 @@ void MultistreamDock::OnSavePresetClicked()
 	if (!ok || name.isEmpty())
 		return;
 
-	std::vector<std::string> enabledIds;
-	for (auto &c : workingConfigs_) {
-		if (c.enabled)
-			enabledIds.push_back(PresetMemberId(c).toStdString());
-	}
-
 	auto presets = SettingsStore::Get().LoadPresets();
 	std::string nameStd = name.toStdString();
 	bool replaced = false;
-	for (auto &[pname, ids] : presets) {
+	for (auto &[pname, members] : presets) {
 		if (pname == nameStd) {
-			ids = enabledIds;
+			members = workingConfigs_;
 			replaced = true;
 			break;
 		}
 	}
 	if (!replaced)
-		presets.push_back({nameStd, enabledIds});
+		presets.push_back({nameStd, workingConfigs_});
 
 	SettingsStore::Get().SavePresets(presets);
 	RefreshPresetCombo();
@@ -940,13 +987,24 @@ void MultistreamDock::OnApplyPresetClicked()
 	if (name.isEmpty())
 		return;
 
-	for (auto &[pname, ids] : SettingsStore::Get().LoadPresets()) {
+	for (auto &[pname, members] : SettingsStore::Get().LoadPresets()) {
 		if (pname != name.toStdString())
 			continue;
 
 		for (auto &c : workingConfigs_) {
 			QString id = PresetMemberId(c);
-			c.enabled = std::find(ids.begin(), ids.end(), id.toStdString()) != ids.end();
+			auto it = std::find_if(members.begin(), members.end(),
+						[&](const OutputConfig &m) { return PresetMemberId(m) == id; });
+			if (it != members.end())
+				// Full restore -- channel, server, key, bitrate,
+				// encoder/reconnect settings, enabled state, all of it,
+				// not just a checkbox flip. This is what makes applying
+				// a preset actually switch which channel/account chat
+				// follows too, since that's just another field on the
+				// same config.
+				c = *it;
+			else
+				c.enabled = false; // not part of this preset's snapshot
 		}
 
 		MultistreamManager::Get().SetConfigs(workingConfigs_);

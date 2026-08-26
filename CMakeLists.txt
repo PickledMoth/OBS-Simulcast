@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.16...3.26)
 
-project(OBS-Simulcast VERSION 0.1.0)
+project(OBS-Simulcast VERSION 0.1.1)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -51,6 +51,7 @@ set(OBS-Simulcast_SOURCES
     ui/remote-image-text-browser.cpp
     ui/floating-chat-overlay.cpp
     ui/chat-diagnostics-dialog.cpp
+    ui/first-run-setup-dialog.cpp
 )
 
 set(OBS-Simulcast_HEADERS
@@ -73,6 +74,7 @@ set(OBS-Simulcast_HEADERS
     ui/remote-image-text-browser.h
     ui/floating-chat-overlay.h
     ui/chat-diagnostics-dialog.h
+    ui/first-run-setup-dialog.h
 )
 
 add_library(OBS-Simulcast MODULE

@@ -15,13 +15,25 @@ public:
 	std::vector<OutputConfig> Load();
 	void Save(const std::vector<OutputConfig> &configs);
 
-	// Named "which platforms are enabled" groups (e.g. "Twitch only",
-	// "Everywhere") for the dock's quick-toggle preset combo. Key is the
-	// preset name; value is the set of "platformId:name" identifiers
-	// (matching how MultistreamManager::SetConfigs matches existing
-	// targets) that should be enabled when that preset is applied.
-	std::vector<std::pair<std::string, std::vector<std::string>>> LoadPresets();
-	void SavePresets(const std::vector<std::pair<std::string, std::vector<std::string>>> &presets);
+	// True once a targets file has actually been written for the current
+	// profile. False the very first time the plugin runs against a profile
+	// (Load() still returns usable data in that case -- DefaultConfigs() --
+	// so this exists purely to let the UI distinguish "brand new install/
+	// profile" from "user has zero targets configured" for one-time-setup
+	// prompts.
+	bool ConfigFileExists() const;
+
+	// Named full-setup snapshots (e.g. "Solo", "Collab") for the dock's
+	// quick-toggle preset combo. Key is the preset name; value is a full
+	// OutputConfig snapshot per member (channel, server, stream key,
+	// bitrate, encoder/reconnect settings, enabled state -- everything),
+	// keyed against current targets the same way MultistreamManager::
+	// SetConfigs matches them (platform + name). Applying a preset restores
+	// each matching target's entire config, not just whether it's enabled
+	// -- e.g. switching to a preset that streams to a different Twitch
+	// channel actually swaps the channel, not just flips a checkbox.
+	std::vector<std::pair<std::string, std::vector<OutputConfig>>> LoadPresets();
+	void SavePresets(const std::vector<std::pair<std::string, std::vector<OutputConfig>>> &presets);
 
 	// Returns the built-in defaults (YouTube/Twitch/Kick, all disabled,
 	// preset servers, empty keys) used the first time the plugin runs.
