@@ -42,6 +42,13 @@ public:
 	// docks or routing chat state through MultistreamManager.
 	void SetChatDock(ChatViewDock *dock) { chatDock_ = dock; }
 
+	// Called from plugin-main.cpp on OBS_FRONTEND_EVENT_FINISHED_LOADING --
+	// deliberately not run from the constructor (which fires during
+	// obs_module_load, before OBS's own dock-restore and before its main
+	// window is fully up), so a first-run modal dialog can't ever pop up
+	// ahead of OBS finishing its own startup.
+	void RunFirstTimeSetupIfNeeded();
+
 private slots:
 	void OnGoLiveClicked();
 	void OnStopClicked();
@@ -55,7 +62,7 @@ private slots:
 
 private:
 	void BuildUi();
-	void RunFirstTimeSetupIfNeeded();
+	void ShowSetupWizard();
 	void PopulateFromManager();
 	void ApplyRowsToManager();
 	void AddPlatformRow(const OutputConfig &config);
@@ -91,5 +98,6 @@ private:
 	QToolButton *tipBtn_ = nullptr;
 
 	QToolButton *diagBtn_ = nullptr;
+	QToolButton *setupWizardBtn_ = nullptr;
 	ChatViewDock *chatDock_ = nullptr;
 };

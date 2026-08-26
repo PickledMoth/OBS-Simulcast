@@ -5,6 +5,7 @@
 #include <QString>
 #include <QFileInfo>
 #include <QDir>
+#include <QDockWidget>
 
 #include "multistream-manager.h"
 #include "multistream-dock.h"
@@ -42,6 +43,36 @@ OBS_DECLARE_MODULE()
 OBS_MODULE_USE_DEFAULT_LOCALE("OBS-Simulcast", "en-US")
 
 static MultistreamDock *g_dock = nullptr;
+static ChatViewDock *g_chatDock = nullptr;
+
+// obs_frontend_add_dock_by_id always leaves a brand-new dock floating and
+// hidden (see OBSStudioAPI::obs_frontend_add_dock_by_id in the OBS source)
+// -- OBS restores whatever position it remembers for that dock's ID on
+// every later launch (dock layout is saved per Windows user, not per
+// profile), but the very first time a dock ID has ever existed, nothing
+// remembers it, so it just sits invisible until the user finds it in the
+// Docks menu. This gives it one sensible starting position instead, but
+// only when it's still in that exact untouched floating+hidden state --
+// the instant a user docks, moves, or closes it themselves, at least one of
+// those flags changes and this becomes a permanent no-op for that dock ID,
+// so a deliberately rearranged layout is never touched again.
+static void PlaceDockIfUntouched(QMainWindow *mainWindow, QWidget *dockContent, Qt::DockWidgetArea area)
+{
+	if (!mainWindow || !dockContent)
+		return;
+
+	const auto dockWidgets = mainWindow->findChildren<QDockWidget *>();
+	for (QDockWidget *dw : dockWidgets) {
+		if (dw->widget() != dockContent)
+			continue;
+		if (dw->isFloating() && !dw->isVisible()) {
+			mainWindow->addDockWidget(area, dw);
+			dw->setFloating(false);
+			dw->setVisible(true);
+		}
+		return;
+	}
+}
 
 // Keep the extra destinations in lockstep with OBS's own "Start/Stop
 // Streaming" button so users don't have to remember a second control:
@@ -69,6 +100,21 @@ static void OnFrontendEvent(enum obs_frontend_event event, void *)
 		if (g_dock)
 			g_dock->RefreshFromManager();
 		break;
+	case OBS_FRONTEND_EVENT_FINISHED_LOADING: {
+		// Fires once OBS has finished its own startup -- main window up,
+		// saved dock layout restored -- so it's safe to (a) give our docks
+		// a first-ever starting position without racing OBS's own restore,
+		// and (b) pop the first-run setup dialog without it appearing
+		// before the main window itself is even shown.
+		QMainWindow *mainWindow = static_cast<QMainWindow *>(obs_frontend_get_main_window());
+		if (g_dock)
+			PlaceDockIfUntouched(mainWindow, g_dock, Qt::BottomDockWidgetArea);
+		if (g_chatDock)
+			PlaceDockIfUntouched(mainWindow, g_chatDock, Qt::RightDockWidgetArea);
+		if (g_dock)
+			g_dock->RunFirstTimeSetupIfNeeded();
+		break;
+	}
 	default:
 		break;
 	}
@@ -93,10 +139,10 @@ bool obs_module_load(void)
 	g_dock = new MultistreamDock(mainWindow);
 	obs_frontend_add_dock_by_id("OBS-Simulcast-dock", obs_module_text("Multistream.DockTitle"), g_dock);
 
-	auto *chatDock = new ChatViewDock(mainWindow);
+	g_chatDock = new ChatViewDock(mainWindow);
 	obs_frontend_add_dock_by_id("OBS-Simulcast-chat-dock", obs_module_text("Multistream.ChatDockTitle"),
-				     chatDock);
-	g_dock->SetChatDock(chatDock);
+				     g_chatDock);
+	g_dock->SetChatDock(g_chatDock);
 
 	return true;
 }
@@ -106,6 +152,7 @@ void obs_module_unload(void)
 	obs_frontend_remove_event_callback(OnFrontendEvent, nullptr);
 	MultistreamManager::Get().StopAll(true);
 	g_dock = nullptr;
+	g_chatDock = nullptr;
 	blog(LOG_INFO, "[OBS-Simulcast] unloaded");
 }
 

@@ -180,6 +180,21 @@ QIcon MakeGearIcon(QColor color)
 	});
 }
 
+QIcon MakeWizardIcon(QColor color)
+{
+	// A little wand-with-sparkles glyph -- reads as "setup/getting started"
+	// distinctly from the key/gear/chat icons already used elsewhere.
+	return MakeVectorIcon(color, [color](QPainter &p, int s) {
+		p.setPen(QPen(color, 2, Qt::SolidLine, Qt::RoundCap));
+		p.drawLine(s * 2 / 10, s * 8 / 10, s * 7 / 10, s * 3 / 10);
+		p.setPen(Qt::NoPen);
+		p.setBrush(color);
+		p.drawEllipse(QPoint(s * 8 / 10, s * 2 / 10), 2, 2);
+		p.drawEllipse(QPoint(s * 6 / 10, s * 7 / 10), 1, 1);
+		p.drawEllipse(QPoint(s * 9 / 10, s * 5 / 10), 1, 1);
+	});
+}
+
 QIcon MakeDiagnosticsIcon(QColor color)
 {
 	// A simple pulse/EKG line -- reads as "connection health" at a glance.
@@ -384,7 +399,8 @@ MultistreamDock::MultistreamDock(QWidget *parent) : QWidget(parent)
 
 	MultistreamManager::Get().LoadFromStore();
 	PopulateFromManager();
-	RunFirstTimeSetupIfNeeded();
+	// RunFirstTimeSetupIfNeeded() is deliberately NOT called here -- see its
+	// declaration in multistream-dock.h for why.
 
 	statusTimer_ = new QTimer(this);
 	connect(statusTimer_, &QTimer::timeout, this, &MultistreamDock::RefreshStatus);
@@ -474,6 +490,12 @@ void MultistreamDock::BuildUi()
 	diagBtn_->setToolTip("Chat Diagnostics -- inspect Twitch/YouTube connection state");
 	connect(diagBtn_, &QToolButton::clicked, this, &MultistreamDock::OnDiagnosticsClicked);
 
+	setupWizardBtn_ = MakeFieldButton(this, QString());
+	setupWizardBtn_->setIcon(MakeWizardIcon(QColor("#dcdde1")));
+	StyleNeutralButton(setupWizardBtn_);
+	setupWizardBtn_->setToolTip("Setup Wizard -- enter Twitch/YouTube keys and save a \"Default\" preset");
+	connect(setupWizardBtn_, &QToolButton::clicked, this, &MultistreamDock::ShowSetupWizard);
+
 	auto *btnRow = new QHBoxLayout();
 	btnRow->setSpacing(6);
 	btnRow->addWidget(addTargetBtn_);
@@ -483,6 +505,7 @@ void MultistreamDock::BuildUi()
 	btnRow->addStretch();
 	btnRow->addWidget(tipBtn_);
 	btnRow->addWidget(diagBtn_);
+	btnRow->addWidget(setupWizardBtn_);
 	btnRow->addWidget(exportBtn_);
 	btnRow->addWidget(importBtn_);
 	btnRow->addWidget(goLiveBtn_);
@@ -542,13 +565,26 @@ void MultistreamDock::BuildUi()
 
 void MultistreamDock::RunFirstTimeSetupIfNeeded()
 {
-	// ConfigFileExists() is false only the very first time this profile has
-	// ever had a dock constructed against it -- every save path (including
-	// this dock's own destructor) writes the file, so this only ever fires
-	// once per profile.
-	if (SettingsStore::Get().ConfigFileExists())
+	// Gated on FirstRunSetupCompleted, not ConfigFileExists -- the targets
+	// file gets written by plenty of paths that have nothing to do with the
+	// wizard (e.g. this dock's own destructor saves unconditionally on
+	// every OBS close), so file-existence alone could mark this "done"
+	// before the user ever actually saw the dialog. This flag is only ever
+	// set right below, once the dialog has actually been shown. Note this
+	// is scoped to the *profile*, not the plugin install: the targets file
+	// lives in OBS's profile directory, so it survives uninstalling/
+	// reinstalling the plugin entirely. ShowSetupWizard() is always
+	// reachable on demand via the toolbar button for anyone who wants to
+	// see it again regardless of this flag.
+	if (SettingsStore::Get().FirstRunSetupCompleted())
 		return;
 
+	ShowSetupWizard();
+	SettingsStore::Get().MarkFirstRunSetupCompleted();
+}
+
+void MultistreamDock::ShowSetupWizard()
+{
 	FirstRunSetupDialog dlg(this);
 	if (dlg.exec() != QDialog::Accepted)
 		return;

@@ -43,6 +43,39 @@ bool SettingsStore::ConfigFileExists() const
 	return !path.empty() && os_file_exists(path.c_str());
 }
 
+bool SettingsStore::FirstRunSetupCompleted() const
+{
+	std::string path = ConfigFilePath();
+	if (path.empty() || !os_file_exists(path.c_str()))
+		return false;
+
+	obs_data_t *root = obs_data_create_from_json_file(path.c_str());
+	if (!root)
+		return false;
+
+	bool shown = obs_data_get_bool(root, "setup_wizard_shown");
+	obs_data_release(root);
+	return shown;
+}
+
+void SettingsStore::MarkFirstRunSetupCompleted()
+{
+	std::string path = ConfigFilePath();
+	if (path.empty())
+		return;
+
+	// Read-modify-write, same as Save()/SavePresets() -- this file also
+	// holds "targets"/"presets", and a fresh root here would wipe those.
+	obs_data_t *root = obs_data_create_from_json_file(path.c_str());
+	if (!root)
+		root = obs_data_create();
+
+	obs_data_set_bool(root, "setup_wizard_shown", true);
+
+	obs_data_save_json_safe(root, path.c_str(), "tmp", "bak");
+	obs_data_release(root);
+}
+
 std::vector<OutputConfig> SettingsStore::DefaultConfigs()
 {
 	std::vector<OutputConfig> defaults;

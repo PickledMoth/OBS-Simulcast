@@ -15,6 +15,10 @@
 #include <QTextBlock>
 #include <QUrl>
 
+#include <obs.h>
+#include <obs.hpp>
+#include <obs-frontend-api.h>
+
 #include "multistream-manager.h"
 #include "platform-icons.h"
 
@@ -103,8 +107,9 @@ void ChatViewDock::BuildUi()
 	layout->addWidget(youtubeStatusLabel_);
 
 	auto *overlayRow = new QHBoxLayout();
-	overlayLinkBtn_ = new QPushButton("Overlay Link (for OBS Browser Source)…", this);
+	overlayLinkBtn_ = new QPushButton("Overlay Link", this);
 	overlayLinkBtn_->setStyleSheet("QPushButton { padding: 2px 8px; font-size: 11px; }");
+	overlayLinkBtn_->setToolTip("Add this same merged chat feed as a Browser Source in the current scene");
 	connect(overlayLinkBtn_, &QPushButton::clicked, this, &ChatViewDock::OnOverlayLinkClicked);
 	overlayRow->addWidget(overlayLinkBtn_);
 
@@ -131,14 +136,65 @@ void ChatViewDock::OnOverlayLinkClicked()
 		return;
 	}
 
-	QApplication::clipboard()->setText(url);
-	QMessageBox::information(
-		this, "Chat Overlay",
-		QString("Copied to clipboard:\n%1\n\nIn OBS: Sources -> + -> Browser Source, paste this as the "
-			"URL. This shows the same merged Twitch+YouTube feed as this dock, with a transparent "
-			"background, so it can sit directly in your stream layout. Local-only -- not reachable "
-			"from outside this machine.")
-			.arg(url));
+	OBSSourceAutoRelease sceneSource = obs_frontend_get_current_scene();
+	if (!sceneSource) {
+		QMessageBox::warning(this, "Chat Overlay", "No scene is currently selected -- pick a scene first.");
+		return;
+	}
+	obs_scene_t *scene = obs_scene_from_source(sceneSource);
+
+	static const char *kSourceName = "Multistream Chat Overlay";
+
+	// Already sitting in this exact scene -- nothing to add, just confirm.
+	if (obs_scene_find_source(scene, kSourceName)) {
+		QMessageBox::information(this, "Chat Overlay",
+					  QString("\"%1\" is already in this scene.").arg(kSourceName));
+		return;
+	}
+
+	OBSSourceAutoRelease existing = obs_get_source_by_name(kSourceName);
+	if (existing) {
+		// A browser source with this name already exists (added to a
+		// different scene earlier) -- reuse it as a new scene item rather
+		// than creating a second independent source pointed at the same
+		// URL, so any crop/filter/size tweaks stay meaningful in one place.
+		if (!obs_scene_add(scene, existing)) {
+			QMessageBox::warning(this, "Chat Overlay", "Couldn't add the overlay source to this scene.");
+			return;
+		}
+		QMessageBox::information(this, "Chat Overlay",
+					  QString("Added the existing \"%1\" source to this scene.").arg(kSourceName));
+		return;
+	}
+
+	OBSDataAutoRelease settings = obs_data_create();
+	obs_data_set_string(settings, "url", url.toUtf8().constData());
+	obs_data_set_int(settings, "width", 800);
+	obs_data_set_int(settings, "height", 600);
+	obs_data_set_bool(settings, "shutdown", true); // stop rendering while not visible in the output
+
+	OBSSourceAutoRelease source = obs_source_create("browser_source", kSourceName, settings, nullptr);
+	if (!source) {
+		// obs-browser isn't bundled with every OBS build/distro -- fall
+		// back to the old copy-the-URL path rather than just failing.
+		QApplication::clipboard()->setText(url);
+		QMessageBox::warning(this, "Chat Overlay",
+				      "Couldn't create a Browser Source (the obs-browser plugin doesn't seem to be "
+				      "available). Copied the URL to the clipboard instead -- add it manually via "
+				      "Sources -> + -> Browser Source.");
+		return;
+	}
+
+	if (!obs_scene_add(scene, source)) {
+		QMessageBox::warning(this, "Chat Overlay", "Couldn't add the overlay source to this scene.");
+		return;
+	}
+
+	QMessageBox::information(this, "Chat Overlay",
+				  QString("Added \"%1\" to the current scene -- same merged Twitch+YouTube feed as "
+					  "this dock, with a transparent background. Resize/reposition it like any "
+					  "other source.")
+					  .arg(kSourceName));
 }
 
 void ChatViewDock::OnFloatingOverlayClicked()

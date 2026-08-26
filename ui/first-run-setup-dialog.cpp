@@ -59,11 +59,18 @@ FirstRunSetupDialog::FirstRunSetupDialog(QWidget *parent) : QDialog(parent)
 	layout->addWidget(twitchGroup);
 
 	auto *youtubeGroup = MakeKeyGroup("YouTube", youtubeEnable_, youtubeKey_, this);
+	auto *youtubeForm = qobject_cast<QFormLayout *>(youtubeGroup->layout());
+	youtubeChannel_ = new QLineEdit(youtubeGroup);
+	youtubeChannel_->setPlaceholderText("Channel handle, e.g. @yourchannel (for chat)");
+	youtubeChannel_->setEnabled(false);
+	youtubeForm->addRow("Channel:", youtubeChannel_);
+	connect(youtubeEnable_, &QCheckBox::toggled, youtubeChannel_, &QLineEdit::setEnabled);
 	layout->addWidget(youtubeGroup);
 
 	auto *note = new QLabel(
-		"(YouTube's chat follows whichever video/channel you set later via the chat link "
-		"button -- YouTube stream keys aren't tied to a channel name the way Twitch's are.)",
+		"(A channel handle lets the plugin's own chat dock auto-follow your next live video. "
+		"OBS's separate Custom Browser Dock embed still needs a specific video link, set later "
+		"via the chat link button once you're live.)",
 		this);
 	note->setWordWrap(true);
 	QFont noteFont = note->font();
@@ -107,6 +114,7 @@ void FirstRunSetupDialog::OnAccept()
 		c.videoBitrateKbps = preset ? preset->defaultVideoBitrateKbps : c.videoBitrateKbps;
 		c.audioBitrateKbps = preset ? preset->defaultAudioBitrateKbps : c.audioBitrateKbps;
 		c.streamKey = youtubeKey_->text().trimmed().toStdString();
+		c.channelName = youtubeChannel_->text().trimmed().toStdString();
 		result_.push_back(std::move(c));
 	}
 

@@ -9,7 +9,7 @@ class QLineEdit;
 class QCheckBox;
 
 // Shown once, the very first time the plugin runs against a profile (see
-// SettingsStore::ConfigFileExists) -- lets the user paste their Twitch and/or
+// SettingsStore::FirstRunSetupCompleted) -- lets the user paste their Twitch and/or
 // YouTube stream keys up front instead of discovering the per-row 🔑 buttons
 // on their own, and immediately saves a "Default" preset from whatever they
 // enter so OnApplyPresetClicked has something real to offer right away.
@@ -33,6 +33,7 @@ private:
 
 	QCheckBox *youtubeEnable_ = nullptr;
 	QLineEdit *youtubeKey_ = nullptr;
+	QLineEdit *youtubeChannel_ = nullptr;
 
 	std::vector<OutputConfig> result_;
 };
