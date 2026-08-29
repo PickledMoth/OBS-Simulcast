@@ -278,7 +278,11 @@ void OutputTarget::OnOutputStart(void *data, calldata_t *)
 void OutputTarget::OnOutputStop(void *data, calldata_t *cd)
 {
 	auto *self = static_cast<OutputTarget *>(data);
-	int64_t code = 0;
+	// calldata_get_int takes long long*, not int64_t* -- on Windows/MSVC
+	// those happen to be the same type so int64_t compiled fine there, but
+	// on 64-bit Linux/glibc int64_t is long (a genuinely distinct type from
+	// long long even though both are 64 bits), which fails to compile.
+	long long code = 0;
 	calldata_get_int(cd, "code", &code);
 
 	if (self->stopping_) {

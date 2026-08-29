@@ -1,0 +1,289 @@
+name: Build
+
+# Windows is the only platform with a working installer and real-world
+# testing (see README.md build steps). The linux/macos jobs below are a
+# first pass at Phase 1/4 of Plan/linux-macos-build-plan.md -- they exist to
+# get real compiler feedback on the non-Windows crypto backends (OpenSSL +
+# QtKeychain, see src/secure-string.cpp and src/password-crypto.cpp) via CI,
+# since there's no local Linux/macOS machine to build on. Expect these two
+# jobs specifically to need iteration on their first few runs (exact
+# dependency package lists, output paths) -- they are not yet known-good the
+# way the windows job is. No installer/packaging step for either platform
+# yet (Phase 2/3 of the plan); this only proves the plugin itself compiles
+# and links.
+
+# Every "Configure obs-studio" step below passes -DOBS_VERSION_OVERRIDE --
+# without it, obs-studio's own cmake/common/versionconfig.cmake runs `git
+# describe --tags` against the obs-studio checkout to derive its version,
+# which fails with a shallow fetch-depth: 1 checkout (no tags reachable, so
+# it falls back to a bare commit hash that doesn't match X.Y.Z and breaks
+# the version parsing downstream). The override value itself is arbitrary
+# -- we only build libobs/obs-frontend-api, nothing here is ever labeled
+# with this version.
+#
+# The obs-studio checkout is also pinned to a stable release tag rather
+# than tracking its default branch -- building against today's bleeding-
+# edge master HEAD means chasing whatever SDK/toolchain/dependency
+# requirements upstream bumps on any given day (this is what caused an
+# early version of this workflow to fail macOS's Xcode SDK version check).
+# Bump the pinned tag deliberately when there's a reason to, not silently.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout obs-multistream
+        uses: actions/checkout@v4
+        with:
+          path: obs-multistream
+
+      - name: Checkout obs-studio
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: "32.2.2" # pinned stable release -- see top-of-file note
+          path: obs-studio
+          fetch-depth: 1
+
+      - name: Configure obs-studio (libobs + obs-frontend-api only)
+        working-directory: obs-studio
+        run: >
+          cmake -B build_x64 -G "Visual Studio 17 2022" -A x64
+          -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DOBS_VERSION_OVERRIDE="31.0.0"
+
+      - name: Build libobs
+        working-directory: obs-studio
+        run: cmake --build build_x64 --config RelWithDebInfo --target libobs
+
+      - name: Build obs-frontend-api
+        working-directory: obs-studio
+        run: cmake --build build_x64 --config RelWithDebInfo --target obs-frontend-api
+
+      - name: Configure obs-multistream
+        working-directory: obs-multistream
+        shell: bash
+        run: |
+          OBS_ROOT="$GITHUB_WORKSPACE/obs-studio"
+          # obs-studio's fetched Qt6 deps folder is named after a version
+          # date that changes whenever upstream bumps it (see
+          # obs-studio/CMakePresets.json's "qt6" -> "version"), so find it
+          # rather than hardcoding a date that will go stale.
+          QT_DEPS_DIR=$(find "$OBS_ROOT/.deps" -maxdepth 1 -iname 'obs-deps-qt6-*-x64' | head -1)
+          if [ -z "$QT_DEPS_DIR" ]; then
+            echo "Could not find fetched Qt6 deps under $OBS_ROOT/.deps" >&2
+            exit 1
+          fi
+          cmake -B build -G "Visual Studio 17 2022" -A x64 \
+            -DLIBOBS_INCLUDE_DIR="$OBS_ROOT/libobs" \
+            -DLIBOBS_LIB="$OBS_ROOT/build_x64/libobs/RelWithDebInfo/obs.lib" \
+            -DOBS_FRONTEND_API_INCLUDE_DIR="$OBS_ROOT/frontend/api" \
+            -DOBS_FRONTEND_API_LIB="$OBS_ROOT/build_x64/frontend/api/RelWithDebInfo/obs-frontend-api.lib" \
+            -DOBS_BUILD_DIR="$OBS_ROOT/build_x64" \
+            -DCMAKE_PREFIX_PATH="$QT_DEPS_DIR"
+
+      - name: Build obs-multistream
+        working-directory: obs-multistream
+        run: cmake --build build --config RelWithDebInfo
+
+      - name: Upload plugin DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-multistream-dll
+          path: obs-multistream/build/RelWithDebInfo/OBS-Simulcast.dll
+
+      # No installer-build step here: installer/ (NSIS script + branding
+      # assets) is deliberately excluded from the public repo -- see
+      # .gitignore -- so the CMake "installer" target never gets registered
+      # in a CI checkout. Producing the actual .exe installer stays a local,
+      # manual step; this job's job is proving the plugin DLL itself builds.
+
+  linux:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout obs-multistream
+        uses: actions/checkout@v4
+        with:
+          path: obs-multistream
+
+      - name: Checkout obs-studio
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: "32.2.2" # pinned stable release -- see top-of-file note
+          path: obs-studio
+          fetch-depth: 1
+
+      # Package list per the official wiki (Build-Instructions-For-Linux) --
+      # everything libobs core needs, split into groups for readability.
+      # ENABLE_PLUGINS=OFF below means CEF/obs-browser and friends aren't
+      # actually built, but libobs itself still needs its own full media/
+      # capture dependency list regardless of which plugins are enabled.
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake extra-cmake-modules ninja-build pkg-config build-essential
+
+      - name: Install libobs build dependencies
+        run: >
+          sudo apt-get install -y
+          libavcodec-dev libavdevice-dev libavfilter-dev libavformat-dev libavutil-dev
+          libswresample-dev libswscale-dev libx264-dev libcurl4-openssl-dev libmbedtls-dev
+          libgl1-mesa-dev libjansson-dev libluajit-5.1-dev python3-dev libx11-dev
+          libxcb-randr0-dev libxcb-shm0-dev libxcb-xinerama0-dev libxcb-composite0-dev
+          libxcomposite-dev libxinerama-dev libxcb1-dev libx11-xcb-dev libxcb-xfixes0-dev
+          swig libcmocka-dev libxss-dev libglvnd-dev libgles2-mesa-dev libwayland-dev
+          librist-dev libsrt-openssl-dev libpci-dev libpipewire-0.3-dev libpulse-dev libasound2-dev libdrm-dev uthash-dev libsimde-dev
+
+      # qt6-base-private-dev specifically: CMake does not probe for this on
+      # its own (obsproject/obs-studio#7075) -- omitting it fails with a
+      # confusing, not-obviously-related error rather than a clear "missing
+      # dependency" message.
+      - name: Install Qt6 development packages
+        run: >
+          sudo apt-get install -y
+          qt6-base-dev qt6-base-private-dev qt6-svg-dev qt6-wayland qt6-image-formats-plugins
+
+      # obs-studio's frontend/cmake/feature-plugin-manager.cmake needs this
+      # via find_package(nlohmann_json CONFIG) -- not in the wiki's package
+      # list (which predates that dependency being added).
+      - name: Install nlohmann_json
+        run: sudo apt-get install -y nlohmann-json3-dev
+
+      # For this plugin's own non-Windows crypto backend (OpenSSL +
+      # QtKeychain's libsecret-based Linux backend) -- see
+      # src/secure-string.cpp and CMakeLists.txt.
+      - name: Install plugin-specific dependencies
+        run: sudo apt-get install -y libssl-dev libsecret-1-dev
+
+      - name: Configure obs-studio (libobs + obs-frontend-api only)
+        working-directory: obs-studio
+        run: >
+          cmake -B build -G Ninja
+          -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DOBS_VERSION_OVERRIDE="31.0.0"
+
+      - name: Build libobs
+        working-directory: obs-studio
+        run: cmake --build build --target libobs
+
+      - name: Build obs-frontend-api
+        working-directory: obs-studio
+        run: cmake --build build --target obs-frontend-api
+
+      - name: Configure obs-multistream
+        working-directory: obs-multistream
+        run: >
+          cmake -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DLIBOBS_DIR="$GITHUB_WORKSPACE/obs-studio"
+          -DOBS_BUILD_DIR="$GITHUB_WORKSPACE/obs-studio/build"
+
+      - name: Build obs-multistream
+        working-directory: obs-multistream
+        run: cmake --build build
+
+      - name: Upload plugin .so
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-multistream-linux-so
+          path: obs-multistream/build/OBS-Simulcast.so
+
+  macos:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout obs-multistream
+        uses: actions/checkout@v4
+        with:
+          path: obs-multistream
+
+      - name: Checkout obs-studio
+        uses: actions/checkout@v4
+        with:
+          repository: obsproject/obs-studio
+          ref: "32.2.2" # pinned stable release -- see top-of-file note
+          path: obs-studio
+          fetch-depth: 1
+
+      # Homebrew Qt6/OpenSSL rather than obs-studio's own fetched deps
+      # bundle (which the Windows job uses) -- that bundle is provisioned
+      # through obs-studio's CMake presets/deps-fetch scripts, which this
+      # first-pass job deliberately isn't taking on yet (see the top-of-file
+      # note). Revisit if this turns out to be the wrong call once this
+      # actually runs.
+      - name: Install build tools and dependencies
+        run: brew install cmake ninja qt@6 openssl@3 simde
+
+      # obs-studio's own macOS build hard-requires the Xcode generator
+      # (cmake/macos/compilerconfig.cmake refuses anything else) -- that
+      # restriction is internal to the obs-studio checkout, not something
+      # this plugin's own CMakeLists.txt inherits, so its own configure
+      # step below stays on Ninja.
+      - name: Configure obs-studio (libobs + obs-frontend-api only)
+        working-directory: obs-studio
+        run: >
+          cmake -B build -G Xcode
+          -DENABLE_PLUGINS=OFF -DENABLE_FRONTEND=OFF
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DOBS_VERSION_OVERRIDE="31.0.0"
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
+          -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)"
+
+      - name: Build libobs
+        working-directory: obs-studio
+        run: cmake --build build --config RelWithDebInfo --target libobs
+
+      - name: Build obs-frontend-api
+        working-directory: obs-studio
+        run: cmake --build build --config RelWithDebInfo --target obs-frontend-api
+
+      - name: Configure obs-multistream
+        working-directory: obs-multistream
+        run: |
+          OBS_ROOT="$GITHUB_WORKSPACE/obs-studio"
+          # libobs's public headers (graphics/vec4.h -> util/sse-intrin.h)
+          # need simde -- confirmed from the "Configure obs-studio" step's
+          # own log that libobs's build resolves this via obs-studio's
+          # auto-downloaded deps bundle, NOT Homebrew's simde formula
+          # (installed above, but never actually used by libobs itself).
+          # Same discovery pattern as the Windows job's QT_DEPS_DIR: the
+          # bundle's directory name is date-stamped and changes whenever
+          # upstream bumps it, so find it rather than hardcoding a date.
+          DEPS_DIR=$(find "$OBS_ROOT/.deps" -maxdepth 1 -iname 'obs-deps-*-universal' | head -1)
+          if [ -z "$DEPS_DIR" ]; then
+            echo "Could not find obs-studio's fetched deps bundle under $OBS_ROOT/.deps" >&2
+            exit 1
+          fi
+          cmake -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DLIBOBS_DIR="$OBS_ROOT" \
+            -DOBS_BUILD_DIR="$OBS_ROOT/build" \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6);$(brew --prefix openssl@3)" \
+            -DCMAKE_CXX_FLAGS="-isystem $DEPS_DIR/include" \
+            -DCMAKE_C_FLAGS="-isystem $DEPS_DIR/include"
+
+      - name: Build obs-multistream
+        working-directory: obs-multistream
+        run: cmake --build build
+
+      - name: Upload plugin module
+        uses: actions/upload-artifact@v4
+        with:
+          name: obs-multistream-macos-so
+          # CMakeLists.txt declares this target as MODULE, which CMake
+          # gives a .so extension on macOS too (not .dylib -- that's only
+          # for plain SHARED libraries), confirmed by the actual build log:
+          # "Linking CXX shared module OBS-Simulcast.so". No "lib" prefix,
+          # same as the Windows .dll and Linux .so.
+          path: obs-multistream/build/OBS-Simulcast.so

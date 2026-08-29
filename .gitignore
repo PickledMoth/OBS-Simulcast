@@ -46,7 +46,3 @@ desktop.ini
 *.pfx
 *.key
 
-# Not pushed: current GitHub OAuth token lacks the `workflow` scope needed
-# to push changes under .github/workflows/. Add/update this file via the
-# GitHub web UI instead, or `gh auth refresh -s workflow` to push it normally.
-.github/workflows/
